@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Camera</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+
+:root {
+  --yellow: #FFD60A;
+  --red: #FF375F;
+  --glass: rgba(0,0,0,0.45);
+  --blur: blur(24px);
+}
+
+html, body {
+  width:100%; height:100dvh;
+  background:#000;
+  overflow:hidden;
+  font-family: -apple-system, 'Helvetica Neue', sans-serif;
+  color:#fff;
+}
+
+/* ── VIEWFINDER full screen ── */
+#viewfinder {
+  position:fixed;
+  inset:0;
+  background:#000;
+  overflow:hidden;
+}
+
+#video {
+  width:100%; height:100%;
+  object-fit:cover;
+  display:block;
+  transform-origin:center center;
+  transition:transform 0.28s cubic-bezier(0.25,0.46,0.45,0.94);
+}
+
+/* Focus square */
+#focus-ring {
+  position:absolute;
+  width:72px; height:72px;
+  border:1.5px solid var(--yellow);
+  pointer-events:none;
+  opacity:0;
+  transform:translate(-50%,-50%) scale(1.35);
+  transition:opacity 0.15s, transform 0.22s cubic-bezier(0.34,1.4,0.64,1);
+  z-index:5;
+}
+#focus-ring.show { opacity:1; transform:translate(-50%,-50%) scale(1); }
+/* corner ticks */
+#focus-ring::before,#focus-ring::after,
+#focus-ring .t,.#focus-ring .b { content:''; position:absolute; background:var(--yellow); }
+
+/* Flash */
+#flash {
+  position:absolute; inset:0;
+  background:#fff; opacity:0;
+  pointer-events:none; z-index:20;
+  transition:opacity 0.06s;
+}
+#flash.on { opacity:1; }
+
+/* ── BOTTOM UI ── */
+#bottom-ui {
+  position:fixed;
+  bottom:0; left:0; right:0;
+  z-index:10;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  padding-bottom:max(env(safe-area-inset-bottom,16px), 16px);
+  /* subtle gradient so controls readable over any bg */
+  background: linear-gradient(to top, rgba(0,0,0,0.55) 0%, transparent 100%);
+}
+
+/* ZOOM PILLS row */
+#zoom-pills {
+  display:flex;
+  align-items:center;
+  gap:2px;
+  margin-bottom:18px;
+}
+
+.zpill {
+  min-width:40px;
+  padding:6px 10px;
+  border-radius:50px;
+  font-size:14px;
+  font-weight:600;
+  color:var(--yellow);
+  background:transparent;
+  border:none;
+  cursor:pointer;
+  transition:background 0.18s, color 0.18s, transform 0.15s;
+  letter-spacing:-0.3px;
+}
+.zpill.active {
+  background:rgba(0,0,0,0.5);
+  backdrop-filter:var(--blur);
+  -webkit-backdrop-filter:var(--blur);
+  color:#fff;
+}
+.zpill:active { transform:scale(0.88); }
+
+/* SHUTTER ROW */
+#shutter-row {
+  width:100%;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:0 28px;
+  margin-bottom:20px;
+}
+
+/* Thumbnail */
+#thumb-wrap {
+  width:58px; height:58px;
+  border-radius:10px;
+  border:2.5px solid rgba(255,255,255,0.5);
+  overflow:hidden;
+  cursor:pointer;
+  flex-shrink:0;
+  background:#1a1a1a;
+  transition:transform 0.15s;
+  position:relative;
+}
+#thumb-wrap:active { transform:scale(0.9); }
+#thumb-img { width:100%; height:100%; object-fit:cover; display:block; }
+#thumb-empty { width:100%; height:100%; display:flex; align-items:center; justify-content:center; font-size:20px; opacity:0.3; }
+
+/* SHUTTER */
+#shutter-btn {
+  width:82px; height:82px;
+  border-radius:50%;
+  background:#fff;
+  border:none;
+  cursor:pointer;
+  flex-shrink:0;
+  position:relative;
+  box-shadow:0 0 0 5px rgba(255,255,255,0.25);
+  transition:transform 0.12s, box-shadow 0.12s;
+}
+#shutter-btn:active { transform:scale(0.91); }
+/* Video mode: red */
+#shutter-btn.video-mode { background:var(--red); box-shadow:0 0 0 5px rgba(255,55,95,0.25); }
+/* Recording: rounded square inside */
+#shutter-btn.recording::after {
+  content:'';
+  position:absolute;
+  inset:50%; transform:translate(-50%,-50%);
+  width:30px; height:30px;
+  border-radius:7px;
+  background:#fff;
+  animation:none;
+}
+#shutter-btn.recording { background:var(--red); }
+
+/* FLIP */
+#flip-btn {
+  width:58px; height:58px;
+  border-radius:50%;
+  background:rgba(255,255,255,0.14);
+  backdrop-filter:var(--blur);
+  -webkit-backdrop-filter:var(--blur);
+  border:none;
+  color:#fff;
+  font-size:24px;
+  display:flex; align-items:center; justify-content:center;
+  cursor:pointer;
+  flex-shrink:0;
+  transition:transform 0.35s cubic-bezier(0.34,1.3,0.64,1), opacity 0.15s;
+}
+#flip-btn:active { opacity:0.6; }
+
+/* MODE TABS */
+#mode-tabs {
+  display:flex;
+  gap:0;
+  align-items:center;
+}
+.mtab {
+  padding:7px 16px;
+  font-size:13px;
+  font-weight:600;
+  letter-spacing:0.5px;
+  text-transform:uppercase;
+  color:rgba(255,255,255,0.45);
+  background:none;
+  border:none;
+  cursor:pointer;
+  transition:color 0.18s;
+  font-family:inherit;
+}
+.mtab.active { color:var(--yellow); }
+
+/* REC timer badge */
+#rec-badge {
+  position:fixed;
+  top:max(env(safe-area-inset-top,16px),16px);
+  left:50%;
+  transform:translateX(-50%);
+  background:var(--glass);
+  backdrop-filter:var(--blur);
+  -webkit-backdrop-filter:var(--blur);
+  border-radius:50px;
+  padding:6px 16px;
+  font-size:13px;
+  font-weight:600;
+  display:none;
+  align-items:center;
+  gap:7px;
+  z-index:20;
+}
+#rec-badge.show { display:flex; }
+.rec-dot { width:7px; height:7px; border-radius:50%; background:var(--red); animation:blink 1s infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.15} }
+
+/* Pinch zoom label */
+#zoom-badge {
+  position:fixed;
+  top:max(env(safe-area-inset-top,16px),16px);
+  left:50%;
+  transform:translateX(-50%);
+  background:var(--glass);
+  backdrop-filter:var(--blur);
+  -webkit-backdrop-filter:var(--blur);
+  border-radius:50px;
+  padding:6px 18px;
+  font-size:15px;
+  font-weight:700;
+  color:var(--yellow);
+  opacity:0;
+  pointer-events:none;
+  z-index:21;
+  transition:opacity 0.2s;
+}
+#zoom-badge.show { opacity:1; }
+
+/* ── GALLERY ── */
+#gallery {
+  position:fixed; inset:0;
+  background:#000; z-index:100;
+  display:flex; flex-direction:column;
+  transform:translateY(100%);
+  transition:transform 0.38s cubic-bezier(0.4,0,0.2,1);
+}
+#gallery.open { transform:translateY(0); }
+
+#gallery-header {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:max(env(safe-area-inset-top,16px),16px) 20px 14px;
+  border-bottom:0.5px solid rgba(255,255,255,0.1);
+}
+#gallery-header h2 { font-size:17px; font-weight:700; }
+.g-close-btn {
+  background:none; border:none;
+  color:var(--yellow); font-size:16px; font-weight:600;
+  cursor:pointer; font-family:inherit;
+}
+
+#gallery-grid {
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:1.5px;
+  overflow-y:auto; flex:1;
+}
+.g-item { aspect-ratio:1; overflow:hidden; cursor:pointer; background:#111; position:relative; }
+.g-item img,.g-item video { width:100%; height:100%; object-fit:cover; display:block; }
+.g-vid-badge {
+  position:absolute; bottom:5px; left:5px;
+  background:rgba(0,0,0,0.55); border-radius:4px;
+  font-size:10px; padding:2px 5px; font-weight:600;
+}
+
+/* ── LIGHTBOX ── */
+#lightbox {
+  position:fixed; inset:0; background:#000; z-index:200;
+  display:flex; flex-direction:column;
+  transform:translateY(100%);
+  transition:transform 0.3s cubic-bezier(0.4,0,0.2,1);
+}
+#lightbox.open { transform:translateY(0); }
+#lb-header {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:max(env(safe-area-inset-top,16px),16px) 20px 12px;
+}
+.lb-x {
+  width:32px; height:32px; border-radius:50%;
+  background:rgba(255,255,255,0.1);
+  border:none; color:#fff; font-size:16px;
+  display:flex; align-items:center; justify-content:center;
+  cursor:pointer;
+}
+#lb-media { flex:1; display:flex; align-items:center; justify-content:center; padding:0 0 8px; }
+#lb-img,#lb-vid { max-width:100%; max-height:100%; object-fit:contain; border-radius:10px; }
+#lb-actions {
+  display:flex; justify-content:space-around;
+  padding:14px 20px max(env(safe-area-inset-bottom,20px),20px);
+  border-top:0.5px solid rgba(255,255,255,0.1);
+}
+.lb-act {
+  display:flex; flex-direction:column; align-items:center; gap:5px;
+  background:none; border:none; color:#fff; cursor:pointer; font-family:inherit;
+}
+.lb-act:active { opacity:0.5; }
+.lb-act .ico { font-size:22px; }
+.lb-act span { font-size:11px; color:rgba(255,255,255,0.5); font-weight:500; }
+.lb-act.del .ico { color:var(--red); }
+
+/* ── PERMISSION ── */
+#perm {
+  display:none; position:fixed; inset:0;
+  background:#000; z-index:999;
+  flex-direction:column; align-items:center; justify-content:center;
+  gap:16px; text-align:center; padding:40px;
+}
+#perm.show { display:flex; }
+#perm .ico { font-size:64px; }
+#perm h2 { font-size:24px; font-weight:700; }
+#perm p { font-size:15px; color:rgba(255,255,255,0.5); line-height:1.6; }
+#perm-btn {
+  margin-top:8px; background:var(--yellow); color:#000;
+  border:none; border-radius:14px; padding:16px 44px;
+  font-size:16px; font-weight:700; cursor:pointer; font-family:inherit;
+}
+</style>
+</head>
+<body>
+
+<!-- VIEWFINDER -->
+<div id="viewfinder">
+  <video id="video" autoplay playsinline muted></video>
+  <div id="focus-ring"></div>
+  <div id="flash"></div>
+</div>
+
+<!-- REC badge -->
+<div id="rec-badge"><div class="rec-dot"></div><span id="rec-time">0:00</span></div>
+
+<!-- Zoom badge -->
+<div id="zoom-badge" id="zoom-badge">1×</div>
+
+<!-- BOTTOM UI -->
+<div id="bottom-ui">
+  <!-- Zoom pills -->
+  <div id="zoom-pills">
+    <button class="zpill" data-z="0.5" onclick="setZoom(0.5,this)">0.5×</button>
+    <button class="zpill active" data-z="1" onclick="setZoom(1,this)">1×</button>
+    <button class="zpill" data-z="2" onclick="setZoom(2,this)">2×</button>
+    <button class="zpill" data-z="5" onclick="setZoom(5,this)">5×</button>
+  </div>
+
+  <!-- Shutter row -->
+  <div id="shutter-row">
+    <div id="thumb-wrap" onclick="openGallery()">
+      <div id="thumb-empty">⎕</div>
+      <img id="thumb-img" src="" style="display:none" alt="">
+    </div>
+    <button id="shutter-btn" onclick="triggerShutter()"></button>
+    <button id="flip-btn" onclick="flipCam()">
+      <svg width="26" height="22" viewBox="0 0 26 22" fill="none">
+        <path d="M2 7.5C2 7.5 5 2 13 2C18.5 2 22 5.5 23.5 8" stroke="white" stroke-width="2.2" stroke-linecap="round"/>
+        <path d="M24 14.5C24 14.5 21 20 13 20C7.5 20 4 16.5 2.5 14" stroke="white" stroke-width="2.2" stroke-linecap="round"/>
+        <path d="M20 5L24 8.5L20 12" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M6 17L2 13.5L6 10" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- Mode tabs -->
+  <div id="mode-tabs">
+    <button class="mtab" data-m="video" onclick="setMode('video')">VIDEO</button>
+    <button class="mtab active" data-m="photo" onclick="setMode('photo')">FOTO</button>
+    <button class="mtab" data-m="portrait" onclick="setMode('portrait')">PORTRAIT</button>
+  </div>
+</div>
+
+<!-- GALLERY -->
+<div id="gallery">
+  <div id="gallery-header">
+    <button class="g-close-btn" onclick="closeGallery()">Tutup</button>
+    <h2>Recents</h2>
+    <div style="width:48px"></div>
+  </div>
+  <div id="gallery-grid"></div>
+</div>
+
+<!-- LIGHTBOX -->
+<div id="lightbox">
+  <div id="lb-header">
+    <button class="lb-x" onclick="closeLb()">✕</button>
+    <span id="lb-label" style="font-size:14px;color:rgba(255,255,255,0.5);font-weight:500"></span>
+    <div style="width:32px"></div>
+  </div>
+  <div id="lb-media">
+    <img id="lb-img" style="display:none" src="" alt="">
+    <video id="lb-vid" style="display:none" controls playsinline></video>
+  </div>
+  <div id="lb-actions">
+    <button class="lb-act" onclick="dlCurrent()"><div class="ico">↓</div><span>Simpan</span></button>
+    <button class="lb-act" onclick="shareCurrent()"><div class="ico">↑</div><span>Bagikan</span></button>
+    <button class="lb-act del" onclick="delCurrent()"><div class="ico">🗑</div><span>Hapus</span></button>
+  </div>
+</div>
+
+<!-- PERMISSION -->
+<div id="perm">
+  <div class="ico">📷</div>
+  <h2>Izinkan Kamera</h2>
+  <p>App ini butuh akses kamera untuk mengambil foto dan video.</p>
+  <button id="perm-btn" onclick="startCam()">Izinkan</button>
+</div>
+
+<script>
+// ── STATE
+let stream = null, facing = 'environment';
+let mode = 'photo', recording = false;
+let mediaRec = null, recChunks = [];
+let items = [], lbIdx = -1;
+let recSecs = 0, recTimer = null;
+let zoomVal = 1;
+let zoomBadgeTimer = null;
+
+// ── ELEMS
+const video = document.getElementById('video');
+const flashEl = document.getElementById('flash');
+const focusRing = document.getElementById('focus-ring');
+const shutterBtn = document.getElementById('shutter-btn');
+const thumbImg = document.getElementById('thumb-img');
+const thumbEmpty = document.getElementById('thumb-empty');
+const recBadge = document.getElementById('rec-badge');
+const recTimeEl = document.getElementById('rec-time');
+const zoomBadge = document.getElementById('zoom-badge');
+
+// ── CAMERA
+async function startCam() {
+  document.getElementById('perm').classList.remove('show');
+  try {
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: facing, width:{ideal:1920}, height:{ideal:1080} },
+      audio: true
+    });
+    video.srcObject = stream;
+    // reset zoom on new stream
+    applyZoom(zoomVal, false);
+  } catch {
+    document.getElementById('perm').classList.add('show');
+  }
+}
+(async () => { try { await startCam(); } catch { document.getElementById('perm').classList.add('show'); } })();
+
+function flipCam() {
+  const btn = document.getElementById('flip-btn');
+  btn.style.transform = 'rotate(180deg)';
+  setTimeout(() => btn.style.transform = '', 380);
+  facing = facing === 'environment' ? 'user' : 'environment';
+  startCam();
+}
+
+// ── ZOOM — CSS scale (smooth everywhere) + hardware if available
+function applyZoom(z, animate = true) {
+  z = Math.max(0.5, Math.min(10, z));
+  zoomVal = z;
+  video.style.transition = animate ? 'transform 0.28s cubic-bezier(0.25,0.46,0.45,0.94)' : 'none';
+  video.style.transform = `scale(${z})`;
+
+  // hardware zoom
+  const track = stream?.getVideoTracks()[0];
+  if (track?.getCapabilities?.()?.zoom) {
+    const caps = track.getCapabilities().zoom;
+    track.applyConstraints({ advanced: [{ zoom: Math.min(caps.max, Math.max(caps.min, z)) }] }).catch(()=>{});
+  }
+
+  // badge
+  const label = z % 1 === 0 ? `${z}×` : `${z.toFixed(1)}×`;
+  zoomBadge.textContent = label;
+  zoomBadge.classList.add('show');
+  clearTimeout(zoomBadgeTimer);
+  zoomBadgeTimer = setTimeout(() => zoomBadge.classList.remove('show'), 1400);
+
+  // sync pills
+  document.querySelectorAll('.zpill').forEach(p => {
+    p.classList.toggle('active', parseFloat(p.dataset.z) === z);
+  });
+}
+
+function setZoom(z, el) { applyZoom(z, true); }
+
+// ── PINCH
+let pinchDist0 = null, pinchZoom0 = 1;
+const vf = document.getElementById('viewfinder');
+
+vf.addEventListener('touchstart', e => {
+  if (e.touches.length === 2) {
+    pinchDist0 = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+    pinchZoom0 = zoomVal;
+  }
+}, {passive:true});
+
+vf.addEventListener('touchmove', e => {
+  if (e.touches.length === 2 && pinchDist0) {
+    const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+    applyZoom(pinchZoom0 * (d / pinchDist0), false);
+  }
+}, {passive:true});
+
+vf.addEventListener('touchend', e => { if (e.touches.length < 2) pinchDist0 = null; }, {passive:true});
+
+// ── FOCUS TAP
+vf.addEventListener('click', e => {
+  if (e.target.closest('#shutter-btn') || e.target.closest('#bottom-ui')) return;
+  const r = vf.getBoundingClientRect();
+  focusRing.style.left = (e.clientX - r.left) + 'px';
+  focusRing.style.top = (e.clientY - r.top) + 'px';
+  focusRing.classList.add('show');
+  setTimeout(() => focusRing.classList.remove('show'), 900);
+});
+
+// ── MODE
+function setMode(m) {
+  mode = m;
+  document.querySelectorAll('.mtab').forEach(t => t.classList.toggle('active', t.dataset.m === m));
+  if (m === 'video') { shutterBtn.classList.add('video-mode'); shutterBtn.classList.remove('recording'); }
+  else { shutterBtn.classList.remove('video-mode', 'recording'); }
+}
+
+// ── SHUTTER
+function triggerShutter() {
+  if (mode === 'video') { recording ? stopRec() : startRec(); }
+  else takePhoto();
+}
+
+function takePhoto() {
+  flashEl.classList.add('on');
+  setTimeout(() => flashEl.classList.remove('on'), 70);
+
+  const c = document.createElement('canvas');
+  c.width = video.videoWidth || 1280;
+  c.height = video.videoHeight || 720;
+  const ctx = c.getContext('2d');
+  if (facing === 'user') { ctx.translate(c.width, 0); ctx.scale(-1,1); }
+  ctx.drawImage(video, 0, 0);
+  c.toBlob(blob => {
+    items.unshift({ type:'photo', url: URL.createObjectURL(blob), blob });
+    updateThumb();
+  }, 'image/jpeg', 0.93);
+}
+
+function startRec() {
+  recChunks = [];
+  let mr;
+  try { mr = new MediaRecorder(stream, { mimeType:'video/webm;codecs=vp8,opus' }); }
+  catch { mr = new MediaRecorder(stream); }
+  mediaRec = mr;
+  mr.ondataavailable = e => { if (e.data.size > 0) recChunks.push(e.data); };
+  mr.onstop = () => {
+    const blob = new Blob(recChunks, { type:'video/webm' });
+    items.unshift({ type:'video', url: URL.createObjectURL(blob), blob });
+    updateThumb();
+  };
+  mr.start(200);
+  recording = true;
+  shutterBtn.classList.add('recording');
+  recBadge.classList.add('show');
+  recSecs = 0;
+  recTimer = setInterval(() => {
+    recSecs++;
+    const m = Math.floor(recSecs/60), s = String(recSecs%60).padStart(2,'0');
+    recTimeEl.textContent = `${m}:${s}`;
+  }, 1000);
+}
+
+function stopRec() {
+  mediaRec?.stop(); recording = false;
+  shutterBtn.classList.remove('recording');
+  recBadge.classList.remove('show');
+  clearInterval(recTimer);
+}
+
+// ── THUMB
+function updateThumb() {
+  if (!items.length) return;
+  const it = items[0];
+  thumbEmpty.style.display = 'none';
+  if (it.type === 'photo') {
+    thumbImg.src = it.url; thumbImg.style.display = 'block';
+  } else {
+    const v = document.createElement('video');
+    v.src = it.url; v.currentTime = 0.2;
+    v.onloadeddata = () => {
+      const c = document.createElement('canvas'); c.width = 58; c.height = 58;
+      c.getContext('2d').drawImage(v, 0,0,58,58);
+      thumbImg.src = c.toDataURL(); thumbImg.style.display = 'block';
+    };
+  }
+}
+
+// ── GALLERY
+function openGallery() {
+  if (!items.length) return;
+  const grid = document.getElementById('gallery-grid');
+  grid.innerHTML = '';
+  items.forEach((it, i) => {
+    const div = document.createElement('div'); div.className = 'g-item';
+    if (it.type === 'photo') {
+      const img = document.createElement('img'); img.src = it.url; div.appendChild(img);
+    } else {
+      const v = document.createElement('video'); v.src = it.url; v.muted = true; div.appendChild(v);
+      const b = document.createElement('div'); b.className = 'g-vid-badge'; b.textContent = '▶ VID'; div.appendChild(b);
+    }
+    div.onclick = () => openLb(i);
+    grid.appendChild(div);
+  });
+  document.getElementById('gallery').classList.add('open');
+}
+function closeGallery() { document.getElementById('gallery').classList.remove('open'); }
+
+// ── LIGHTBOX
+function openLb(i) {
+  lbIdx = i;
+  const it = items[i];
+  const img = document.getElementById('lb-img'), vid = document.getElementById('lb-vid');
+  document.getElementById('lb-label').textContent = `${i+1} / ${items.length}`;
+  if (it.type === 'photo') { img.src = it.url; img.style.display = 'block'; vid.style.display = 'none'; vid.pause(); }
+  else { vid.src = it.url; vid.style.display = 'block'; img.style.display = 'none'; }
+  document.getElementById('lightbox').classList.add('open');
+}
+function closeLb() { document.getElementById('lightbox').classList.remove('open'); document.getElementById('lb-vid').pause(); }
+
+function dlCurrent() {
+  if (lbIdx < 0) return;
+  const it = items[lbIdx]; const a = document.createElement('a');
+  a.href = it.url; a.download = it.type === 'photo' ? `foto_${Date.now()}.jpg` : `video_${Date.now()}.webm`; a.click();
+}
+async function shareCurrent() {
+  if (lbIdx < 0) return;
+  const it = items[lbIdx];
+  const file = new File([it.blob], it.type === 'photo' ? 'foto.jpg' : 'video.webm', { type: it.blob.type });
+  try {
+    if (navigator.canShare?.({ files:[file] })) await navigator.share({ files:[file] });
+    else dlCurrent();
+  } catch {}
+}
+function delCurrent() {
+  if (lbIdx < 0) return;
+  items.splice(lbIdx, 1); closeLb();
+  if (!items.length) { thumbImg.style.display='none'; thumbEmpty.style.display='flex'; closeGallery(); }
+  else { updateThumb(); openGallery(); }
+}
+</script>
+</body>
+</html>
